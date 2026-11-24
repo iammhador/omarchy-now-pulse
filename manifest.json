@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.iammhador.now-pulse",
+  "name": "Now Pulse",
+  "version": "1.0.0",
+  "author": "iammhador",
+  "license": "MIT",
+  "description": "Now playing from every audio source in the bar: browsers, Spotify, mpv, VLC and more. Cover-colored player card with a chip per source, seek, play/pause, skip, shuffle, repeat and volume",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Now Pulse",
+    "description": "Now playing from any app, with a player card on click",
+    "category": "Media",
+    "defaultSection": "center",
+    "allowMultiple": false,
+    "defaults": {
+      "maxWidth": 240,
+      "showArtist": true,
+      "marquee": true,
+      "showAppIcon": true,
+      "pillProgress": true,
+      "scrollAction": "volume",
+      "showWhenIdle": false,
+      "skipSpotify": false,
+      "pauseOthers": false,
+      "coverColors": true,
+      "blurBackdrop": true
+    },
+    "schema": [
+      { "key": "maxWidth", "type": "integer", "label": "Max text width (px)", "min": 80, "max": 800, "step": 10, "defaultValue": 240, "description": "Longer titles scroll or get cut off." },
+      { "key": "showArtist", "type": "boolean", "label": "Show artist", "defaultValue": true },
+      { "key": "marquee", "type": "boolean", "label": "Scroll long titles", "defaultValue": true },
+      { "key": "showAppIcon", "type": "boolean", "label": "App icon on the cover", "defaultValue": true, "description": "A small badge showing which app is playing." },
+      { "key": "pillProgress", "type": "boolean", "label": "Progress in the bar", "defaultValue": true, "description": "Progress drawn around the bar's cover." },
+      { "key": "scrollAction", "type": "enum", "label": "Mouse wheel on the bar", "options": ["volume", "track", "source", "none"], "defaultValue": "volume", "description": "source: switch between open players." },
+      { "key": "showWhenIdle", "type": "boolean", "label": "Show when nothing is playing", "defaultValue": false },
+      { "key": "skipSpotify", "type": "boolean", "label": "Skip Spotify", "defaultValue": false, "description": "Leave Spotify to Spotify Pulse." },
+      { "key": "pauseOthers", "type": "boolean", "label": "Pause others", "defaultValue": false, "description": "When one source starts playing, pause the rest." },
+      { "key": "coverColors", "type": "boolean", "label": "Cover colors", "defaultValue": true, "description": "Theme the card from the cover art." },
+      { "key": "blurBackdrop", "type": "boolean", "label": "Blurred cover backdrop", "defaultValue": true }
+    ]
+  }
+}
