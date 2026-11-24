@@ -12,6 +12,8 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Mpris
 import Quickshell.Wayland
+import Quickshell.Hyprland
+import qs.Commons
 import qs.Commons as Commons
 import "Model.js" as Model
 
@@ -29,12 +31,20 @@ Item {
   property bool pauseOthers: false
   property bool coverColors: true
   property bool pillProgress: true
+  property bool trackToast: true
+  property int toastSeconds: 4
+  property string barPosition: "top"
+  property string fontFamily: Style.font.family
 
   function configure(c) {
     skipSpotify = c.skipSpotify === true
     pauseOthers = c.pauseOthers === true
     coverColors = c.coverColors !== false
     pillProgress = c.pillProgress !== false
+    trackToast = c.trackToast !== false
+    toastSeconds = Math.max(2, Math.min(15, Number(c.toastSeconds) || 4))
+    if (c.barPosition) barPosition = String(c.barPosition)
+    if (c.fontFamily) fontFamily = String(c.fontFamily)
   }
 
   readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/now-pulse"
@@ -42,7 +52,28 @@ Item {
   // ---------------------------------------------------------------- players
 
   // Every source worth showing, in the order MPRIS lists them.
-  readonly property var players: Model.filterPlayers(Mpris.players.values, { skipSpotify: skipSpotify })
+  readonly property var players: Model.filterPlayers(Mpris.players.values, { skipSpotify: skipSpotify, keep: holdKey, demoOnly: demoOnly })
+  // Set over IPC (`demo true`) for screenshots: real sources stay hidden.
+  property bool demoOnly: false
+
+  // Between two tracks a source reports "Stopped" with no title for a while
+  // (YouTube's autoplay countdown is ~8 s, a click to another video ~0.5 s).
+  // The last source with a title is held, with its last track, until it
+  // has been blank this long, so the bar doesn't blink and the card stays open.
+  readonly property int holdMs: 12000
+  property string holdKey: ""
+  property var held: ({ title: "", artist: "", album: "", artUrl: "" })
+  Timer {
+    id: holdTimer
+    interval: svc.holdMs
+    onTriggered: svc.holdKey = ""
+  }
+  function noteTitle(p, titled) {
+    var k = Model.key(p)
+    if (titled) {
+      if (k === holdKey) holdTimer.stop()
+    } else if (k === holdKey) holdTimer.restart()
+  }
   readonly property int count: players.length
 
   // key -> ms when it last (really) started playing, and when it stopped.
@@ -100,6 +131,8 @@ Item {
       id: watch
       required property var modelData
       readonly property bool playing: !!modelData && modelData.isPlaying
+      readonly property bool titled: !!modelData && String(modelData.trackTitle || "").trim() !== ""
+      onTitledChanged: svc.noteTitle(modelData, titled)
       onPlayingChanged: {
         if (playing) takeover.restart()
         else { takeover.stop(); svc.noteStopped(modelData) }
@@ -126,16 +159,32 @@ Item {
   // ---------------------------------------------------------------- now playing
 
   readonly property bool running: player !== null
-  readonly property bool playing: running && player.isPlaying
-  readonly property string title: running ? String(player.trackTitle || "") : ""
-  readonly property string artist: running ? String(player.trackArtist || "") : ""
-  readonly property string album: running ? String(player.trackAlbum || "") : ""
-  readonly property string artUrl: running ? String(player.trackArtUrl || "") : ""
+  readonly property bool playing: running && !!player && player.isPlaying
+  readonly property string rawTitle: running && !!player ? String(player.trackTitle || "").trim() : ""
+  // Riding out a gap between tracks: show the last one.
+  readonly property bool holding: running && rawTitle === "" && playerKey === holdKey && held.title !== ""
+  readonly property string title: holding ? held.title : rawTitle
+  readonly property string artist: holding ? held.artist : (running && !!player ? String(player.trackArtist || "") : "")
+  readonly property string album: holding ? held.album : (running && !!player ? String(player.trackAlbum || "") : "")
+  readonly property string artUrl: holding ? held.artUrl : (running && !!player ? String(player.trackArtUrl || "") : "")
+  // Remember the current track, keyed by its source, for the gap after it.
+  // Read the key from the player itself: playerKey may not have caught up yet.
+  function captureHold() {
+    if (rawTitle === "" || !player) return
+    // players depends on holdKey: set it after this evaluation, not inside it.
+    var k = Model.key(player)
+    if (k !== holdKey) Qt.callLater(function() { svc.holdKey = k })
+    holdTimer.stop()
+    held = { title: rawTitle, artist: String(player.trackArtist || ""), album: String(player.trackAlbum || ""),
+             artUrl: String(player.trackArtUrl || "") }
+  }
+  onRawTitleChanged: captureHold()
+  onPlayerChanged: captureHold()
   readonly property string trackKey: playerKey + "\u0001" + title + "\u0001" + artist
-  readonly property real duration: running && player.lengthSupported ? Math.max(0, player.length) : 0
-  readonly property real position: running && player.positionSupported ? Model.clamp(player.position, 0, duration || 1e9) : 0
+  readonly property real duration: running && !!player && player.lengthSupported ? Math.max(0, player.length) : 0
+  readonly property real position: running && !!player && player.positionSupported ? Model.clamp(player.position, 0, duration || 1e9) : 0
   readonly property real progress: duration > 0 ? position / duration : 0
-  readonly property bool volumeSupported: running && player.volumeSupported
+  readonly property bool volumeSupported: running && !!player && player.volumeSupported
   readonly property real volume: volumeSupported ? player.volume : 0
 
   readonly property string appName: Model.appName(player)
@@ -146,7 +195,11 @@ Item {
   readonly property string displayTitle: title !== "" ? title : (site || appName)
   // "YouTube · Zen", or just the app.
   readonly property string sourceLabel: site !== "" && site !== appName ? site + "  ·  " + appName : appName
-  readonly property bool live: running && duration <= 0
+  // No timeline: either a real live stream, or a player that doesn't share
+  // one (Zen / Firefox never send a length). Only call it LIVE when it looks
+  // like one; otherwise just show no seek bar.
+  readonly property bool timeless: running && duration <= 0
+  readonly property bool live: timeless && Model.looksLive(title, site)
   readonly property bool browser: Model.isBrowser(player)
 
   // The site a player is on: from its URL, else from its window's title
@@ -156,9 +209,27 @@ Item {
     var url = p.metadata ? p.metadata["xesam:url"] : ""
     var s = Model.siteName(url)
     if (s !== "") return s
+    var track = String(p.trackTitle || "")
+    s = Model.siteFromTrack(track)
+    if (s !== "") return s
     var w = windowFor(p)
-    return w ? Model.siteFromTitle(w.title) : ""
+    if (w) s = Model.siteFromTitle(w.title) || Model.siteGuess(w.title, track, String(p.trackArtist || ""))
+    // Brave / Chrome only name the site through the active tab's title: keep
+    // what was learned for this source while its tab is in the background
+    // or between tracks.
+    var k = Model.key(p)
+    var memo = siteMemo[k]
+    if (s !== "") {
+      if (!memo || memo.site !== s || memo.track !== track) _remember(k, { site: s, track: track })
+      return s
+    }
+    // Only for the same track (or the blank gap after it): another tab may
+    // have started something else on another site.
+    return memo && (track === "" || memo.track === track) ? memo.site : ""
   }
+  // key -> { site, track } last seen. Written outside the binding reading it.
+  property var siteMemo: ({})
+  function _remember(k, v) { Qt.callLater(function() { svc.siteMemo = svc._with(svc.siteMemo, k, v) }) }
   function labelFor(p) { return siteFor(p) || Model.appName(p) }
 
   // The window showing a player, or null when it can't be told for sure.
@@ -199,7 +270,7 @@ Item {
   readonly property bool videoPossible: running && !Model.isAudioApp(player) && (browser || hasVideo)
   // The video plays in a background tab: the mirror would show another page.
   readonly property bool videoTabHidden: hasVideo && !Model.showsTrack(videoWindow.title, title)
-  readonly property bool canShowTab: running && player.canRaise
+  readonly property bool canShowTab: running && !!player && player.canRaise
 
   // Bring the playing tab to the front of its window (MPRIS Raise selects it
   // in Firefox / Zen), then hop back to the workspace you were on.
@@ -226,8 +297,8 @@ Item {
 
   // ---------------------------------------------------------------- controls
 
-  function playPause() { if (running && player.canTogglePlaying) player.togglePlaying() }
-  function next() { if (running && player.canGoNext) player.next() }
+  function playPause() { if (running && !!player && player.canTogglePlaying) player.togglePlaying() }
+  function next() { if (running && !!player && player.canGoNext) player.next() }
   function previous() {
     if (!running) return
     // Like most players: restart the track unless we're at its very start.
@@ -236,12 +307,12 @@ Item {
     else if (player.canSeek && duration > 0) seekTo(0)
   }
   function seekTo(seconds) {
-    if (running && player.canSeek && duration > 0) player.position = Model.clamp(seconds, 0, duration - 0.5)
+    if (running && !!player && player.canSeek && duration > 0) player.position = Model.clamp(seconds, 0, duration - 0.5)
   }
   function setVolume(v) {
     if (volumeSupported) player.volume = Model.clamp(v, 0, 1)
   }
-  function toggleShuffle() { if (running && player.shuffleSupported) player.shuffle = !player.shuffle }
+  function toggleShuffle() { if (running && !!player && player.shuffleSupported) player.shuffle = !player.shuffle }
   function cycleRepeat() {
     if (!running || !player.loopSupported) return
     if (player.loopState === MprisLoopState.None) player.loopState = MprisLoopState.Playlist
@@ -271,7 +342,7 @@ Item {
 
   Process {
     id: focusProc
-    onExited: function(code) { if (code !== 0 && svc.running && svc.player.canRaise) svc.player.raise() }
+    onExited: function(code) { if (code !== 0 && svc.running && svc.player && svc.player.canRaise) svc.player.raise() }
   }
 
   // ---------------------------------------------------------------- position
@@ -291,7 +362,7 @@ Item {
     interval: Math.max(250, svc.tickInterval)
     repeat: true
     running: svc.playing && svc.tickInterval > 0
-    onTriggered: svc.player.positionChanged()
+    onTriggered: if (svc.player) svc.player.positionChanged()
   }
 
   // ---------------------------------------------------------------- colors
@@ -353,6 +424,143 @@ Item {
     rescaleSize: 64
     onColorsChanged: svc.sampleColors()
   }
+
+
+  // ---------------------------------------------------------------- pop-up
+  // A small card under the bar when a new track starts. Not for the first
+  // track after the shell starts, a repeat of the one just shown, a source
+  // that isn't playing, while a card is open, during Do Not Disturb, over a
+  // fullscreen window, or when you're looking at the playing app already.
+
+  signal cardRequested()
+
+  property string toastShownKey: ""
+  property var toastData: ({})
+  property bool toastUp: false
+  property bool started: false
+  Timer { interval: 3000; running: true; onTriggered: svc.started = true }
+
+  // Omarchy's notification quiet state: {"dnd": true}.
+  property bool doNotDisturb: false
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/notifications/quiet.json"
+    watchChanges: true
+    onFileChanged: reload()
+    onLoaded: {
+      try { svc.doNotDisturb = JSON.parse(text()).dnd === true } catch (e) { svc.doNotDisturb = false }
+    }
+    onLoadFailed: svc.doNotDisturb = false
+  }
+
+  // Title + artist, not the player: the same song from another source is
+  // not news.
+  readonly property string songKey: title + "\u0001" + artist
+  onSongKeyChanged: if (title !== "") toastDelay.restart()
+  onPlayingChanged: if (playing && title !== "" && songKey !== toastShownKey) toastDelay.restart()
+
+  // Wait for the metadata to settle (players send title, then artist, then
+  // art) and for the source to really be playing.
+  Timer {
+    id: toastDelay
+    interval: 1200
+    onTriggered: svc.maybeToast()
+  }
+
+  function lookingAtPlayer() {
+    var w = ToplevelManager.activeToplevel
+    if (!w || !running) return false
+    var id = String(w.appId || "").toLowerCase()
+    var want = Model.desktopId(player).toLowerCase()
+    if (id === "" || want === "") return false
+    // Same app; for browsers only when the playing tab is the one in front.
+    if (id !== want && id.replace(/-browser$/, "") !== want.replace(/-browser$/, "")) return false
+    return !browser || Model.showsTrack(w.title, title)
+  }
+  function fullscreenNow() {
+    var ws = Hyprland.focusedWorkspace
+    return !!ws && ws.hasFullscreen === true
+  }
+
+  // Why the last track change did or didn't pop up (for `status`).
+  property string toastReason: ""
+  function maybeToast() {
+    if (!trackToast) { toastReason = "off"; return }
+    if (!started || !running || !playing || holding || title === "") { toastReason = "not playing yet"; return }
+    if (songKey === toastShownKey) { toastReason = "same song"; return }
+    toastShownKey = songKey
+    if (openCards > 0) { toastReason = "card open"; return }
+    if (doNotDisturb) { toastReason = "do not disturb"; return }
+    if (fullscreenNow()) { toastReason = "fullscreen"; return }
+    if (lookingAtPlayer()) { toastReason = "looking at the player"; return }
+    toastReason = "shown"
+    showToast()
+  }
+  function showToast() {
+    if (!running) return
+    toastData = {
+      title: displayTitle, artist: artist, source: sourceLabel,
+      glyph: siteGlyph || appGlyph, art: artUrl, hasArt: hasArt,
+      canNext: !!player && player.canGoNext
+    }
+    toastUp = true
+    Qt.callLater(function() { if (svc.toastItem) svc.toastItem.show() })
+  }
+  function hideToast() { if (toastItem) toastItem.hide() }
+  property var toastItem: null
+
+  PanelWindow {
+    id: toastWindow
+    visible: svc.toastUp
+    screen: {
+      var name = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
+      var list = Quickshell.screens
+      for (var i = 0; i < list.length; i++) if (list[i].name === name) return list[i]
+      return list.length ? list[0] : null
+    }
+    anchors.top: svc.barPosition !== "bottom"
+    anchors.bottom: svc.barPosition === "bottom"
+    margins.top: Style.space(8)
+    margins.bottom: Style.space(8)
+    implicitWidth: toast.implicitWidth + Style.space(24)
+    implicitHeight: toast.implicitHeight + Style.space(28)
+    color: "transparent"
+    WlrLayershell.namespace: "now-pulse-toast"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+    // Under the bar, without pushing windows away.
+    exclusionMode: ExclusionMode.Normal
+    exclusiveZone: 0
+    mask: Region { item: toast }
+
+    PulseToast {
+      id: toast
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.top: svc.barPosition === "bottom" ? undefined : parent.top
+      anchors.bottom: svc.barPosition === "bottom" ? parent.bottom : undefined
+      anchors.topMargin: Style.space(4)
+      anchors.bottomMargin: Style.space(4)
+      title: svc.toastData.title || ""
+      artist: svc.toastData.artist || ""
+      source: svc.toastData.source || ""
+      glyph: svc.toastData.glyph || ""
+      art: svc.toastData.art || ""
+      hasArt: svc.toastData.hasArt === true
+      canNext: svc.toastData.canNext === true
+      fromBottom: svc.barPosition === "bottom"
+      accent: svc.accent
+      accent2: svc.accent2
+      fg: Commons.Color.foreground
+      bg: Commons.Color.background
+      fontFamily: svc.fontFamily
+      seconds: svc.toastSeconds
+      Component.onCompleted: svc.toastItem = toast
+      onActivated: svc.cardRequested()
+      onNextRequested: { svc.next(); hide() }
+      onDismissed: svc.toastUp = false
+    }
+  }
+  // A card opening takes over from the pop-up.
+  onOpenCardsChanged: if (openCards > 0) hideToast()
 
   onArtUrlChanged: fetchArt()
   onCoverColorsChanged: fetchArt()

@@ -127,4 +127,37 @@ assert.equal(v.x, 0); assert.equal(v.y, 225 - 400)                // pinned to t
 assert.equal(zoomAt({ zoom: 8, x: 0, y: 0 }, 2, 0, 0, 400, 200, 400, 225).zoom, 8)
 assert.equal(zoomAt({ zoom: 1, x: 0, y: 0 }, 0.5, 0, 0, 400, 200, 400, 225).zoom, 1)
 
+// filterPlayers: a source between tracks is held
+assert.equal(filterPlayers([empty], { keep: key(empty) }).length, 1)
+assert.equal(filterPlayers([empty], { keep: 'other' }).length, 0)
+
+// siteFromTitle: "on <Site>", " : " separators; siteFromTrack; siteGuess
+assert.equal(siteFromTitle('Explore - Find your favorite videos on TikTok - Chromium'), 'TikTok')
+assert.equal(siteFromTitle('Planet Money : Instagram'), 'Instagram')
+assert.equal(siteFromTrack('KICK'), 'Kick')
+assert.equal(siteFromTrack('Instagram'), 'Instagram')
+assert.equal(siteFromTrack('Hoor (Official Video)'), '')
+assert.equal(siteGuess('What is PeerTube? - Framatube - Chromium', 'What is PeerTube?', ''), 'Framatube')
+assert.equal(siteGuess('The Europa Concept | NASA+ - Chromium', 'The Europa Concept', ''), 'NASA+')
+assert.equal(siteGuess('Hoor - Atif Aslam — Zen Browser', 'Hoor', 'Atif Aslam'), '')          // artist, not a site
+assert.equal(siteGuess('Video.js | Open Source Video Player - Chromium', 'Video.js', ''), '')  // a tagline
+assert.equal(siteGuess('Something else - Site', 'Hoor (Official)', ''), '')                    // other tab
+assert.equal(siteGuess('Live TV — DW English - Chromium', 'Live TV', ''), 'DW English')
+
+// siteName: proper names for common sites; hosted subdomains
+assert.equal(siteName('https://9gag.com/'), '9GAG')
+assert.equal(siteName('https://plus.nasa.gov/video'), 'NASA')
+assert.equal(siteName('https://somafm.com/player/'), 'SomaFM')
+assert.equal(siteName('https://archive.org/details/x'), 'Internet Archive')
+assert.equal(siteName('https://shaka-player-demo.appspot.com/demo/'), 'Shaka Player Demo')
+assert.equal(siteName('https://iammhador.github.io/x'), 'Iammhador')
+assert.equal(siteName('https://poridhi.io/x'), 'Poridhi')
+// looksLive
+assert.ok(looksLive('Anything', 'Twitch'))
+assert.ok(looksLive('🔴 LIVE: Somoy TV News', 'YouTube'))
+assert.ok(looksLive('DW News livestream', ''))
+assert.ok(!looksLive('Big Buck Bunny 60fps 4K', 'YouTube'))
+assert.ok(!looksLive('Oliver - Delivered', 'YouTube'))
+// demoOnly
+assert.deepEqual(filterPlayers([brave, P('mpv.demo')], { demoOnly: true }).map(key), ['org.mpris.MediaPlayer2.mpv.demo'])
 console.log('model tests passed')

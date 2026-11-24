@@ -24,6 +24,7 @@ import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Mpris
+import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
 import qs.Commons as Commons
@@ -93,6 +94,7 @@ BarWidget {
   readonly property string siteGlyph: svc ? svc.siteGlyph : ""
   readonly property string displayTitle: svc ? svc.displayTitle : ""
   readonly property bool live: svc ? svc.live : false
+  readonly property bool timeless: svc ? svc.timeless : false
   readonly property bool hasArt: svc ? svc.hasArt : false
   readonly property bool artLogo: svc ? svc.artLogo : false
   // What the player is called in messages: "YouTube", else the app.
@@ -122,10 +124,15 @@ BarWidget {
   readonly property bool skipSpotify: flag("skipSpotify", false)
   readonly property bool pauseOthers: flag("pauseOthers", false)
   readonly property string scrollAction: choice("scrollAction", "volume", ["volume", "track", "source", "none"])
+  readonly property bool trackToast: flag("trackToast", true)
+  readonly property int toastSeconds: Number(setting("toastSeconds", 4)) > 0 ? Number(setting("toastSeconds", 4)) : 4
 
   readonly property var serviceConfig: ({
     skipSpotify: skipSpotify, pauseOthers: pauseOthers,
-    coverColors: coverColors, pillProgress: pillProgress
+    coverColors: coverColors, pillProgress: pillProgress,
+    trackToast: trackToast, toastSeconds: toastSeconds,
+    barPosition: bar && bar.position ? String(bar.position) : "top",
+    fontFamily: fontFamily
   })
   onServiceConfigChanged: pushConfig()
   function pushConfig() { if (svc) svc.configure(serviceConfig) }
@@ -159,6 +166,19 @@ BarWidget {
   function toggle() { if (running) popupOpen = !popupOpen }
   onRunningChanged: if (!running) close()
 
+  // The pop-up was clicked: open the card on the monitor that has focus.
+  readonly property string monitorName: {
+    var w = root.QsWindow.window
+    return w && w.screen ? String(w.screen.name) : ""
+  }
+  Connections {
+    target: root.svc
+    function onCardRequested() {
+      var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
+      if (root.monitorName === "" || focused === "" || root.monitorName === focused) root.open()
+    }
+  }
+
   function playPause() { if (svc) svc.playPause() }
   function next() {
     if (!running) return
@@ -169,6 +189,7 @@ BarWidget {
   function seekTo(seconds) {
     if (!running) return
     if (live) { notice("Live · no timeline to seek"); return }
+    if (timeless) { notice(sourceName + " doesn't share a timeline"); return }
     if (!player.canSeek) { notice("Can't seek on " + sourceName); return }
     svc.seekTo(seconds)
   }
@@ -288,6 +309,10 @@ BarWidget {
     function raise(): void { root.raiseApp() }
     // Swap the card's cover for a live view of the video window.
     function video(): void { root.toggleVideo() }
+    // Show the track-change pop-up for what's playing now.
+    function toast(): void { if (root.svc) root.svc.showToast() }
+    // Screenshot mode: show only players named *.demo (tools/fake-player.py).
+    function demo(on: bool): void { if (root.svc) root.svc.demoOnly = on }
     function status(): string {
       var s = root.svc
       var list = []
@@ -297,7 +322,7 @@ BarWidget {
       }
       return JSON.stringify({
         running: root.running, playing: root.playing, popupOpen: root.popupOpen,
-        app: root.appName, source: root.sourceLabel, pinned: s ? s.pinned : "",
+        app: root.appName, source: root.sourceLabel, pinned: s ? s.pinned : "", hold: s ? s.holdKey : "", holding: s ? s.holding : false, toast: s ? s.toastReason : "",
         title: root.title, artist: root.artist, album: root.album,
         position: Math.round(root.position * 10) / 10, duration: root.duration,
         volume: root.volumeSupported ? root.volume : null,
@@ -1039,7 +1064,7 @@ BarWidget {
           fill: root.animatedAccent
           fill2: root.animatedAccent2
           track: Util.alpha(root.panelFg, 0.15)
-          enabled: root.running && root.player.canSeek && root.duration > 0
+          enabled: root.running && !!root.player && root.player.canSeek && root.duration > 0
           onReleased: function(v) { root.seekTo(v) }
 
           Rectangle {
@@ -1105,8 +1130,8 @@ BarWidget {
           color: root.panelFg
           accent: root.animatedAccent
           fontFamily: root.fontFamily
-          active: root.running && root.player.shuffle
-          visible: root.running && root.player.shuffleSupported
+          active: root.running && !!root.player && root.player.shuffle
+          visible: root.running && !!root.player && root.player.shuffleSupported
           onClicked: root.toggleShuffle()
         }
 
@@ -1121,7 +1146,7 @@ BarWidget {
             color: root.panelFg
             accent: root.animatedAccent
             fontFamily: root.fontFamily
-            enabled: root.running && (root.player.canGoPrevious || root.player.canSeek)
+            enabled: root.running && !!root.player && (root.player.canGoPrevious || root.player.canSeek)
             opacity: enabled ? 1 : 0.3
             onClicked: root.previous()
           }
@@ -1207,14 +1232,14 @@ BarWidget {
             color: root.panelFg
             accent: root.animatedAccent
             fontFamily: root.fontFamily
-            enabled: root.running && root.player.canGoNext
+            enabled: root.running && !!root.player && root.player.canGoNext
             opacity: enabled ? 1 : 0.3
             onClicked: root.next()
           }
         }
 
         PulseIconButton {
-          readonly property int loop: root.running ? root.player.loopState : MprisLoopState.None
+          readonly property int loop: root.running && root.player ? root.player.loopState : MprisLoopState.None
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           icon: loop === MprisLoopState.Track ? "󰑘" : "󰑖"
@@ -1223,7 +1248,7 @@ BarWidget {
           accent: root.animatedAccent
           fontFamily: root.fontFamily
           active: loop !== MprisLoopState.None
-          visible: root.running && root.player.loopSupported
+          visible: root.running && !!root.player && root.player.loopSupported
           onClicked: root.cycleRepeat()
         }
       }
@@ -1521,7 +1546,7 @@ BarWidget {
           height: previewElapsed.implicitHeight
           Text {
             id: previewElapsed
-            text: (root.playing ? "" : "Paused  ·  ") + (root.duration > 0 ? Model.timestamp(root.position) : "Live")
+            text: [root.playing ? "" : "Paused", root.duration > 0 ? Model.timestamp(root.position) : (root.live ? "Live" : "")].filter(function(x) { return x !== "" }).join("  ·  ")
             color: Util.alpha(root.panelFg, 0.55)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

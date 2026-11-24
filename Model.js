@@ -24,11 +24,18 @@ function key(player) {
 function filterPlayers(players, opts) {
   var out = []
   var skipSpotify = !!(opts && opts.skipSpotify)
+  // A source between two tracks (YouTube's autoplay countdown, a click to
+  // another video) reports "Stopped" with no title for a moment. `keep` is
+  // the one being held through that gap, so the bar and card don't vanish.
+  var keep = opts && opts.keep ? String(opts.keep) : ""
+  // Screenshot mode: only the fake players from tools/fake-player.py.
+  var demoOnly = !!(opts && opts.demoOnly)
   for (var i = 0; i < (players ? players.length : 0); i++) {
     var p = players[i]
     if (!p || isProxy(p)) continue
     if (skipSpotify && isSpotify(p)) continue
-    if (String(p.trackTitle || "").trim() === "" && !p.isPlaying) continue
+    if (demoOnly && !/\.demo$/.test(String(p.dbusName || ""))) continue
+    if (String(p.trackTitle || "").trim() === "" && !p.isPlaying && (keep === "" || key(p) !== keep)) continue
     out.push(p)
   }
   return out
@@ -196,8 +203,28 @@ var SITES = {
   "pinterest.com": ["Pinterest", "󰐃"], "discord.com": ["Discord", "󰙯"], "udemy.com": ["Udemy", "󰑴"],
   "coursera.org": ["Coursera", "󰑴"], "open.spotify.com": ["Spotify", "󰓇"], "soundcloud.com": ["SoundCloud", "󰓀"],
   "bandcamp.com": ["Bandcamp", "󰝚"], "music.apple.com": ["Apple Music", "󰝚"], "deezer.com": ["Deezer", "󰝚"],
-  "tidal.com": ["TIDAL", "󰝚"]
+  "tidal.com": ["TIDAL", "󰝚"], "youtube-nocookie.com": ["YouTube", "󰗃"], "mixcloud.com": ["Mixcloud", "󰝚"],
+  "music.amazon.com": ["Amazon Music", "󰝚"], "podcasts.apple.com": ["Apple Podcasts", "󰦔"],
+  "pocketcasts.com": ["Pocket Casts", "󰦔"], "audible.com": ["Audible", "󰋋"], "audiomack.com": ["Audiomack", "󰝚"],
+  "jiosaavn.com": ["JioSaavn", "󰝚"], "gaana.com": ["Gaana", "󰝚"], "anghami.com": ["Anghami", "󰝚"],
+  "jamendo.com": ["Jamendo", "󰝚"], "tunein.com": ["TuneIn", "󰐹"], "somafm.com": ["SomaFM", "󰐹"],
+  "radio.garden": ["Radio Garden", "󰐹"], "npr.org": ["NPR", "󰐹"], "bbc.co.uk": ["BBC", "󰐹"], "bbc.com": ["BBC", "󰐹"],
+  "ted.com": ["TED", "󰕧"], "archive.org": ["Internet Archive", "󰕧"], "nasa.gov": ["NASA", "󰕧"],
+  "9gag.com": ["9GAG", "󰕧"], "imgur.com": ["Imgur", "󰕧"], "streamable.com": ["Streamable", "󰕧"],
+  "rumble.com": ["Rumble", "󰕧"], "odysee.com": ["Odysee", "󰕧"], "bilibili.com": ["Bilibili", "󰕧"],
+  "nicovideo.jp": ["Niconico", "󰕧"], "vk.com": ["VK", "󰕧"], "vkvideo.ru": ["VK Video", "󰕧"],
+  "khanacademy.org": ["Khan Academy", "󰑴"], "w3schools.com": ["W3Schools", "󰑴"], "dw.com": ["DW", "󰕧"],
+  "aljazeera.com": ["Al Jazeera", "󰕧"], "euronews.com": ["Euronews", "󰕧"], "crunchyroll.com": ["Crunchyroll", "󰕧"],
+  "hulu.com": ["Hulu", "󰕧"], "max.com": ["Max", "󰕧"], "tv.apple.com": ["Apple TV", "󰕧"], "zee5.com": ["ZEE5", "󰕧"],
+  "sonyliv.com": ["SonyLIV", "󰕧"], "jiohotstar.com": ["JioHotstar", "󰕧"], "toffeelive.com": ["Toffee", "󰕧"],
+  "binge.buzz": ["Binge", "󰕧"], "prothomalo.com": ["Prothom Alo", "󰕧"], "somoynews.tv": ["Somoy TV", "󰕧"],
+  "jamuna.tv": ["Jamuna TV", "󰕧"], "pexels.com": ["Pexels", "󰕧"], "pixabay.com": ["Pixabay", "󰕧"],
+  "videojs.com": ["Video.js", "󰕧"], "plyr.io": ["Plyr", "󰕧"], "plex.tv": ["Plex", "󰕧"], "coub.com": ["Coub", "󰕧"]
 }
+
+// Hosts that serve many unrelated sites: the subdomain is the site's name
+// ("shaka-player-demo.appspot.com" -> "Shaka Player Demo").
+var HOSTED = /\.(github\.io|gitlab\.io|netlify\.app|vercel\.app|pages\.dev|appspot\.com|web\.app|firebaseapp\.com|herokuapp\.com|blogspot\.com|onrender\.com|fly\.dev)$/
 
 function _siteEntry(host) {
   if (SITES[host]) return SITES[host]
@@ -213,6 +240,11 @@ function siteName(url) {
   var host = m[1].toLowerCase().replace(/^(www|m|web|mobile)\./, "")
   var e = _siteEntry(host) || _siteEntry("web." + host)
   if (e) return e[0]
+  if (HOSTED.test(host)) {
+    var sub = host.replace(HOSTED, "").split(".").pop()
+    return sub.split(/[-_]+/).filter(function(w) { return w !== "" })
+      .map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1) }).join(" ")
+  }
   var parts = host.split(".")
   var label = parts.length > 1 ? parts[parts.length - 2] : parts[0]
   if (label.length <= 3 && parts.length > 2) label = parts[parts.length - 3]   // bbc.co.uk
@@ -237,11 +269,41 @@ function _stripBrowser(title) {
 // "YouTube"), when it's one we know. Brave and Chrome give MPRIS no URL.
 function siteFromTitle(title) {
   var t = _stripBrowser(title)
-  var m = /(?:\s[-—–|•·]\s|^)([^-—–|•·]+)$/.exec(t)
+  var m = /(?:\s[-—–|•·:]\s|^)([^-—–|•·:]+)$/.exec(t)
   var last = m ? m[1].trim().toLowerCase() : ""
   if (last === "") return ""
-  for (var h in SITES) if (SITES[h][0].toLowerCase() === last) return SITES[h][0]
+  // "Explore - Find your favorite videos on TikTok"
+  var on = /\bon ([a-z0-9+.' ]{2,20})$/.exec(last)
+  for (var h in SITES) {
+    var n = SITES[h][0].toLowerCase()
+    if (n === last || (on && on[1] === n)) return SITES[h][0]
+  }
   return ""
+}
+
+// A known site named by the track title itself ("Instagram", "KICK"): some
+// sites give no better title than their own name.
+function siteFromTrack(trackTitle) {
+  var t = String(trackTitle || "").trim().toLowerCase()
+  if (t === "") return ""
+  for (var h in SITES) if (SITES[h][0].toLowerCase() === t) return SITES[h][0]
+  return ""
+}
+
+// An unknown site's name from the tail of its window title, when the title
+// is "<track> - <Site>": "What is PeerTube? - Framatube" -> "Framatube".
+// Only a short name that isn't the artist, so "Song - Artist" stays unnamed.
+function siteGuess(windowTitle, trackTitle, artist) {
+  var w = _stripBrowser(windowTitle).trim()
+  var t = String(trackTitle || "").trim()
+  if (t.length < 4 || w.toLowerCase().indexOf(t.toLowerCase()) !== 0) return ""
+  var m = /^\s*(?:[-—–|•·:])\s+(.+)$/.exec(w.slice(t.length))
+  if (!m) return ""
+  var name = m[1].trim()
+  if (name.length < 2 || name.length > 20 || name.split(/\s+/).length > 2) return ""
+  if (!/^[A-Z0-9]/.test(name) || /[-—–|•·:]/.test(name)) return ""
+  if (artist && name.toLowerCase() === String(artist).trim().toLowerCase()) return ""
+  return name
 }
 
 // A title that says nothing about the content ("Instagram", "Facebook",
@@ -252,6 +314,13 @@ function isGenericTitle(title, site) {
   if (site && t === String(site).toLowerCase()) return true
   for (var h in SITES) if (SITES[h][0].toLowerCase() === t) return true
   return /^(video|audio|media|untitled|playing)$/.test(t)
+}
+
+// Whether a track with no length is a live stream: the site only streams
+// live, or the title says so. Otherwise it's a player not sharing a length.
+function looksLive(title, site) {
+  if (/^(twitch|kick)$/i.test(String(site || ""))) return true
+  return /\blive\b|🔴|\blivestream\b|\bon air\b|লাইভ|সরাসরি/i.test(String(title || ""))
 }
 
 // Apps that play sound without a video worth mirroring.
