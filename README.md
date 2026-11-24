@@ -35,6 +35,14 @@ A keybinding for the card, in `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + ALT + P", "Now Pulse", "omarchy-shell now-pulse toggle")
 ```
 
+### Removing
+
+```bash
+omarchy plugin remove io.github.iammhador.now-pulse
+```
+
+This removes the widget from the bar and deletes the plugin folder. Covers cached for color sampling are in `~/.cache/now-pulse`; delete that folder too if you like.
+
 ### Updating
 
 ```bash
