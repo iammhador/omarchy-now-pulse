@@ -52,6 +52,18 @@ assert.equal(appGlyph(P('weird')), '󰝚')
 assert.equal(desktopId(brave), 'brave-browser')
 assert.equal(desktopId(zen), 'zen')
 assert.equal(windowClass(zen), 'class:^(zen)$')
+assert.equal(windowClass(P('org.gnome.Totem', { desktopEntry: 'org.gnome.Totem' })), 'class:^(org\\.gnome\\.Totem)$')
+
+// cleanText / safeArtUrl
+assert.equal(cleanText('Hello\nWorld\x07\t!'), 'Hello World !')
+assert.equal(safeArtUrl('https://i.scdn.co/image/abc'), 'https://i.scdn.co/image/abc')
+assert.equal(safeArtUrl('http://localhost:8080/cover.jpg'), 'http://localhost:8080/cover.jpg')
+assert.equal(safeArtUrl('file:///home/user/cover.png'), 'file:///home/user/cover.png')
+assert.equal(safeArtUrl('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA')
+assert.equal(safeArtUrl('ftp://evil.example/a.png'), '')
+assert.equal(safeArtUrl('image://theme/icon'), '')
+assert.equal(safeArtUrl('data:text/html;base64,AAAA'), '')
+assert.equal(safeArtUrl('http://169.254.169.254/latest/meta-data'), '')
 
 // siteName
 assert.equal(siteName('https://www.youtube.com/watch?v=x'), 'YouTube')
@@ -142,6 +154,9 @@ assert.ok(!showsTrack('Hacker News — Zen Browser', 'Ye Fitoor Mera'))
 assert.ok(showsTrack('Picture-in-Picture', 'anything'))
 assert.ok(!showsTrack('Picture-in-Picture - Other Video — Mozilla Firefox', 'Hoor'))
 assert.ok(showsTrack('Whatever', ''))
+assert.ok(isVideoTitleVerified({ title: 'Hoor (Official Video) - YouTube — Zen Browser' }, 'Hoor (Official Video)'))
+assert.ok(!isVideoTitleVerified({ title: 'Picture-in-Picture' }, 'Hoor (Official Video)'))
+assert.equal(pickWindow([{ appId: 'zen-browser', title: 'Hoor (Official Video) — Zen Browser' }], 'zen', 'Hoor (Official Video)'), 0)
 assert.equal(clamp(NaN, 0, 1), 0)
 
 // clampView / zoomAt (content 400x200 in a 400x225 viewport)

@@ -133,10 +133,33 @@ function desktopId(player) {
   return bus === "brave" ? "brave-browser" : bus
 }
 
+function cleanText(value) {
+  return String(value || "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim()
+}
+
+function safeArtUrl(url) {
+  var u = String(url || "").trim()
+  if (u === "" || u.length > 4096) return ""
+  if (/^file:\/\/(?:localhost)?\//i.test(u)) return u
+  if (/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(u)) return u
+  var m = /^https?:\/\/([^\/?#:\[\]]+|\[[0-9a-fA-F:]+\])(?::(\d+))?(?:[\/?#]|$)/i.exec(u)
+  if (!m) return ""
+  var host = m[1].toLowerCase().replace(/^\[|\]$/g, "")
+  if (/^(?:169\.254\.|0\.0\.0\.0$|::?$|fe[89ab][0-9a-f]:|metadata\.google\.internal$)/i.test(host)) return ""
+  return u
+}
+
+function _sameAppId(a, b) {
+  var x = String(a || "").toLowerCase()
+  var y = String(b || "").toLowerCase()
+  if (x === "" || y === "") return false
+  return x === y || x.replace(/-browser$/, "") === y.replace(/-browser$/, "")
+}
+
 // Hyprland window class pattern for focusing the app.
 function windowClass(player) {
   var id = desktopId(player).replace(/[^A-Za-z0-9_.-]/g, "")
-  return id ? "class:^(" + id + ")$" : ""
+  return id ? "class:^(" + id.replace(/\./g, "\\.") + ")$" : ""
 }
 
 function _isPipTitle(title) {
@@ -159,7 +182,7 @@ function pickWindow(windows, appId, trackTitle, sameAppPlayers) {
   var titled = []
   for (var i = 0; i < windows.length; i++) {
     var w = windows[i]
-    if (!w || String(w.appId || "").toLowerCase() !== want) continue
+    if (!w || !_sameAppId(w.appId, want)) continue
     var title = String(w.title || "").toLowerCase()
     if (_isPipTitle(title)) {
       pip.push(i)
@@ -173,6 +196,18 @@ function pickWindow(windows, appId, trackTitle, sameAppPlayers) {
   if (pip.length === 1 && !generic && t !== "" && !(Number(sameAppPlayers) > 1)) return pip[0]
   if (titled.length === 1) return titled[0]
   return -1
+}
+
+// Whether a window title itself explicitly names the current non-generic track
+// (as opposed to an untitled "Picture-in-Picture" fallback). Used to gate
+// automatic Video mode on tracks without cover art.
+function isVideoTitleVerified(windowObj, trackTitle) {
+  if (!windowObj) return false
+  if (isGenericTitle(trackTitle, "")) return false
+  var t = String(trackTitle || "").toLowerCase().trim().slice(0, 40)
+  if (t === "") return false
+  var w = String(windowObj.title || "").toLowerCase()
+  return w.indexOf(t) !== -1
 }
 
 // Whether a window title (the browser's active tab) is this track: if not,

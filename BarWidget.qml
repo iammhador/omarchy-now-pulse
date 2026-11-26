@@ -65,7 +65,10 @@ BarWidget {
   }
 
   onBarChanged: resolveService()
-  onSvcChanged: pushConfig()
+  onSvcChanged: {
+    if (svc && localService.active && svc !== localService.item) localService.active = false
+    pushConfig()
+  }
   Component.onCompleted: resolveService()
   Component.onDestruction: if (svc) {
     if (viewing) svc.cardOpened(false)
@@ -239,8 +242,9 @@ BarWidget {
   readonly property bool hasVideo: svc ? svc.hasVideo : false
   readonly property bool videoPossible: svc ? svc.videoPossible : false
   readonly property bool videoTabHidden: svc ? svc.videoTabHidden : false
+  readonly property bool videoTitleVerified: svc ? svc.videoTitleVerified : false
   property string viewChoice: ""          // "", "cover" or "video"
-  readonly property bool showVideo: hasVideo && (viewChoice === "video" || (viewChoice === "" && !hasArt && !videoTabHidden))
+  readonly property bool showVideo: hasVideo && (viewChoice === "video" || (viewChoice === "" && !hasArt && !videoTabHidden && videoTitleVerified))
   readonly property string sourceKey: svc ? svc.playerKey : ""
   onSourceKeyChanged: viewChoice = ""
   function setVideo(on) {
