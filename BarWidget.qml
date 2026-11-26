@@ -67,7 +67,10 @@ BarWidget {
   onBarChanged: resolveService()
   onSvcChanged: pushConfig()
   Component.onCompleted: resolveService()
-  Component.onDestruction: if (viewing && svc) svc.cardOpened(false)
+  Component.onDestruction: if (svc) {
+    if (viewing) svc.cardOpened(false)
+    if (popupOpen) svc.freeze(false)
+  }
 
   // ---------------------------------------------------------------- player
 
@@ -113,7 +116,7 @@ BarWidget {
     return options.indexOf(v) !== -1 ? v : fallback
   }
 
-  readonly property int maxWidth: Number(setting("maxWidth", 240)) > 0 ? Number(setting("maxWidth", 240)) : 240
+  readonly property int maxWidth: Model.clamp(Number(setting("maxWidth", 240)) || 240, 80, 800)
   readonly property bool showArtist: flag("showArtist", true)
   readonly property bool marquee: flag("marquee", true)
   readonly property bool showWhenIdle: flag("showWhenIdle", false)
@@ -125,7 +128,7 @@ BarWidget {
   readonly property bool pauseOthers: flag("pauseOthers", false)
   readonly property string scrollAction: choice("scrollAction", "volume", ["volume", "track", "source", "none"])
   readonly property bool trackToast: flag("trackToast", true)
-  readonly property int toastSeconds: Number(setting("toastSeconds", 4)) > 0 ? Number(setting("toastSeconds", 4)) : 4
+  readonly property int toastSeconds: Model.clamp(Number(setting("toastSeconds", 4)) || 4, 2, 15)
 
   readonly property var serviceConfig: ({
     skipSpotify: skipSpotify, pauseOthers: pauseOthers,
@@ -175,7 +178,12 @@ BarWidget {
     target: root.svc
     function onCardRequested() {
       var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
-      if (root.monitorName === "" || focused === "" || root.monitorName === focused) root.open()
+      if (root.monitorName === "") { root.open(); return }
+      if (focused !== "") {
+        if (root.monitorName === focused) root.open()
+        return
+      }
+      if (Quickshell.screens.length === 0 || root.monitorName === Quickshell.screens[0].name) root.open()
     }
   }
 
@@ -230,8 +238,9 @@ BarWidget {
   // Video by itself; your own choice holds until the source changes.
   readonly property bool hasVideo: svc ? svc.hasVideo : false
   readonly property bool videoPossible: svc ? svc.videoPossible : false
+  readonly property bool videoTabHidden: svc ? svc.videoTabHidden : false
   property string viewChoice: ""          // "", "cover" or "video"
-  readonly property bool showVideo: hasVideo && (viewChoice === "video" || (viewChoice === "" && !hasArt))
+  readonly property bool showVideo: hasVideo && (viewChoice === "video" || (viewChoice === "" && !hasArt && !videoTabHidden))
   readonly property string sourceKey: svc ? svc.playerKey : ""
   onSourceKeyChanged: viewChoice = ""
   function setVideo(on) {
@@ -555,14 +564,14 @@ BarWidget {
       id: keys
       anchors.fill: parent
       focus: true
-      Keys.onEscapePressed: { if (root.helpOpen) root.helpOpen = false; else root.close() }
-      Keys.onSpacePressed: root.playPause()
-      Keys.onLeftPressed: root.seekTo(root.position - 5)
-      Keys.onRightPressed: root.seekTo(root.position + 5)
-      Keys.onUpPressed: root.nudgeVolume(0.05)
-      Keys.onDownPressed: root.nudgeVolume(-0.05)
-      Keys.onTabPressed: root.cycleSource(1)
-      Keys.onBacktabPressed: root.cycleSource(-1)
+      Keys.onEscapePressed: function(e) { if (root.helpOpen) root.helpOpen = false; else root.close(); e.accepted = true }
+      Keys.onSpacePressed: function(e) { root.playPause(); e.accepted = true }
+      Keys.onLeftPressed: function(e) { root.seekTo(root.position - 5); e.accepted = true }
+      Keys.onRightPressed: function(e) { root.seekTo(root.position + 5); e.accepted = true }
+      Keys.onUpPressed: function(e) { root.nudgeVolume(0.05); e.accepted = true }
+      Keys.onDownPressed: function(e) { root.nudgeVolume(-0.05); e.accepted = true }
+      Keys.onTabPressed: function(e) { root.cycleSource(1); e.accepted = true }
+      Keys.onBacktabPressed: function(e) { root.cycleSource(-1); e.accepted = true }
       Keys.onPressed: function(e) {
         if (e.key >= Qt.Key_0 && e.key <= Qt.Key_9) root.seekTo(root.duration * (e.key - Qt.Key_0) / 10)
         else if (e.key === Qt.Key_N) root.next()

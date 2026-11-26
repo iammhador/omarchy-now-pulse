@@ -81,7 +81,7 @@ Item {
     cursorShape: Qt.PointingHandCursor
     preventStealing: true
 
-    function at(x) { return Model.clamp(x / width, 0, 1) * s.maximum }
+    function at(x) { return Model.clamp(x / Math.max(1, width), 0, 1) * s.maximum }
 
     onPressed: function(m) {
       s.dragValue = at(m.x)
@@ -98,6 +98,7 @@ Item {
       s.released(s.dragValue)
       s.dragging = false
     }
+    onCanceled: s.dragging = false
     onWheel: function(w) {
       var step = s.maximum * 0.05
       s.released(Model.clamp(s.value + (w.angleDelta.y > 0 ? step : -step), 0, s.maximum))

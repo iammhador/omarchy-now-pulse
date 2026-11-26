@@ -139,34 +139,53 @@ function windowClass(player) {
   return id ? "class:^(" + id + ")$" : ""
 }
 
+function _isPipTitle(title) {
+  return /\bpicture[- ]in[- ]picture\b/.test(String(title || "").toLowerCase())
+}
+
 // The window showing this player's video, as an index into `windows`
 // ([{appId, title}]), or -1 when it can't be told for sure. A
-// Picture-in-Picture window is the video itself, so it wins; otherwise the
-// window whose title (the active tab) holds the track title. Never "any
-// window of the app": with one player per browser process, that would
-// mirror an unrelated page. Generic titles ("Instagram") can't match.
-function pickWindow(windows, appId, trackTitle) {
+// Picture-in-Picture window is preferred when unambiguous, otherwise the
+// single window whose active tab holds the non-generic track title.
+// Multiple PiP windows or multiple same-app instances require the track
+// title in the PiP title itself so unrelated private windows never leak.
+function pickWindow(windows, appId, trackTitle, sameAppPlayers) {
   var want = String(appId || "").toLowerCase()
   if (!windows || want === "") return -1
   var generic = isGenericTitle(trackTitle, "")
   var t = String(trackTitle || "").toLowerCase().trim().slice(0, 40)
-  var titled = -1
+  var pip = []
+  var pipMatched = []
+  var titled = []
   for (var i = 0; i < windows.length; i++) {
     var w = windows[i]
     if (!w || String(w.appId || "").toLowerCase() !== want) continue
     var title = String(w.title || "").toLowerCase()
-    if (/picture[- ]in[- ]picture/.test(title)) return i
-    if (titled < 0 && !generic && title.indexOf(t) !== -1) titled = i
+    if (_isPipTitle(title)) {
+      pip.push(i)
+      if (!generic && t !== "" && title.indexOf(t) !== -1) pipMatched.push(i)
+      continue
+    }
+    if (!generic && t !== "" && title.indexOf(t) !== -1) titled.push(i)
   }
-  return titled
+  if (pipMatched.length === 1) return pipMatched[0]
+  if (pipMatched.length > 1) return -1
+  if (pip.length === 1 && !generic && t !== "" && !(Number(sameAppPlayers) > 1)) return pip[0]
+  if (titled.length === 1) return titled[0]
+  return -1
 }
 
 // Whether a window title (the browser's active tab) is this track: if not,
 // the video plays in a background tab and a mirror would show another page.
 function showsTrack(windowTitle, trackTitle) {
   var t = String(trackTitle || "").toLowerCase().trim().slice(0, 40)
-  var w = String(windowTitle || "").toLowerCase()
-  return t === "" || /picture[- ]in[- ]picture/.test(w) || w.indexOf(t) !== -1
+  var w = String(windowTitle || "").toLowerCase().trim()
+  if (t === "") return true
+  if (_isPipTitle(w)) {
+    var rest = _stripBrowser(w).replace(/\bpicture[- ]in[- ]picture\b/, "").replace(/^[\s\-—–|•·:]+|[\s\-—–|•·:]+$/g, "")
+    return rest === "" || rest.indexOf(t) !== -1
+  }
+  return w.indexOf(t) !== -1
 }
 
 // Zoom / pan for the video view. `v` = {zoom, x, y} with x, y the content
@@ -352,7 +371,9 @@ function timestamp(seconds) {
 }
 
 function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value))
+  var n = Number(value)
+  if (!isFinite(n)) return min
+  return Math.max(min, Math.min(max, n))
 }
 
 // ---------------------------------------------------------------- colors

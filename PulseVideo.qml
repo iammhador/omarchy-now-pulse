@@ -81,7 +81,7 @@ Item {
       y: v.px.y
       width: v.baseW * v.px.zoom
       height: v.baseH * v.px.zoom
-      captureSource: v.source
+      captureSource: v.live ? v.source : null
       live: v.live
       paintCursor: false
     }
