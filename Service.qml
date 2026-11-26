@@ -47,7 +47,9 @@ Item {
     if (c.fontFamily) fontFamily = String(c.fontFamily)
   }
 
-  readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/now-pulse"
+  readonly property string _homeDir: String(Quickshell.env("HOME") || "")
+  readonly property string _xdgCache: String(Quickshell.env("XDG_CACHE_HOME") || "")
+  readonly property string cacheDir: _xdgCache !== "" ? (_xdgCache + "/now-pulse") : (_homeDir !== "" ? (_homeDir + "/.cache/now-pulse") : "")
 
   // ---------------------------------------------------------------- players
 
@@ -160,26 +162,31 @@ Item {
 
   readonly property bool running: player !== null
   readonly property bool playing: running && !!player && player.isPlaying
-  readonly property string rawTitle: running && !!player ? String(player.trackTitle || "").trim() : ""
+  readonly property string rawTitle: running && !!player ? Model.cleanText(player.trackTitle) : ""
   // Riding out a gap between tracks: show the last one.
   readonly property bool holding: running && rawTitle === "" && playerKey === holdKey && held.title !== ""
   readonly property string title: holding ? held.title : rawTitle
-  readonly property string artist: holding ? held.artist : (running && !!player ? String(player.trackArtist || "") : "")
-  readonly property string album: holding ? held.album : (running && !!player ? String(player.trackAlbum || "") : "")
-  readonly property string artUrl: holding ? held.artUrl : (running && !!player ? String(player.trackArtUrl || "") : "")
+  readonly property string artist: holding ? held.artist : (running && !!player ? Model.cleanText(player.trackArtist) : "")
+  readonly property string album: holding ? held.album : (running && !!player ? Model.cleanText(player.trackAlbum) : "")
+  readonly property string artUrl: holding ? held.artUrl : (running && !!player ? Model.safeArtUrl(player.trackArtUrl) : "")
   // Remember the current track, keyed by its source, for the gap after it.
   // Read the key from the player itself: playerKey may not have caught up yet.
   function captureHold() {
     if (rawTitle === "" || !player) return
     // players depends on holdKey: set it after this evaluation, not inside it.
     var k = Model.key(player)
-    if (k !== holdKey) Qt.callLater(function() { svc.holdKey = k })
+    if (k !== holdKey) Qt.callLater(function() { if (svc.player && Model.key(svc.player) === k) svc.holdKey = k })
     holdTimer.stop()
-    held = { title: rawTitle, artist: String(player.trackArtist || ""), album: String(player.trackAlbum || ""),
-             artUrl: String(player.trackArtUrl || "") }
+    held = {
+      title: rawTitle,
+      artist: Model.cleanText(player.trackArtist),
+      album: Model.cleanText(player.trackAlbum),
+      artUrl: Model.safeArtUrl(player.trackArtUrl)
+    }
   }
   onRawTitleChanged: captureHold()
   onPlayerChanged: captureHold()
+  onRunningChanged: if (!running) { holdTimer.stop(); holdKey = ""; held = { title: "", artist: "", album: "", artUrl: "" } }
   readonly property string trackKey: playerKey + "\u0001" + title + "\u0001" + artist
   readonly property real duration: running && !!player && player.lengthSupported ? Math.max(0, player.length) : 0
   readonly property real position: running && !!player && player.positionSupported ? Model.clamp(player.position, 0, duration || 1e9) : 0
@@ -235,10 +242,18 @@ Item {
   // The window showing a player, or null when it can't be told for sure.
   function windowFor(p) {
     if (!p || Model.isAudioApp(p)) return null
+    var want = Model.desktopId(p).toLowerCase()
+    var sameApp = 0
+    var allMpris = Mpris.players.values
+    for (var j = 0; j < allMpris.length; j++) {
+      var mp = allMpris[j]
+      if (!mp || Model.isProxy(mp)) continue
+      if (Model._sameAppId(Model.desktopId(mp), want)) sameApp++
+    }
     var all = ToplevelManager.toplevels.values
     var list = []
     for (var i = 0; i < all.length; i++) list.push({ appId: all[i].appId, title: all[i].title })
-    var idx = Model.pickWindow(list, Model.desktopId(p), String(p.trackTitle || ""))
+    var idx = Model.pickWindow(list, want, String(p.trackTitle || ""), sameApp)
     return idx >= 0 ? all[idx] : null
   }
 
@@ -270,20 +285,23 @@ Item {
   readonly property bool videoPossible: running && !Model.isAudioApp(player) && (browser || hasVideo)
   // The video plays in a background tab: the mirror would show another page.
   readonly property bool videoTabHidden: hasVideo && !Model.showsTrack(videoWindow.title, title)
+  readonly property bool videoTitleVerified: hasVideo && Model.isVideoTitleVerified(videoWindow, title)
   readonly property bool canShowTab: running && !!player && player.canRaise
 
   // Bring the playing tab to the front of its window (MPRIS Raise selects it
   // in Firefox / Zen), then hop back to the workspace you were on.
   function showVideoTab() {
-    if (!canShowTab || tabProc.running) return
+    if (!canShowTab || !player || tabProc.running) return
+    var bus = String(player.dbusName || "")
+    if (!/^org\.mpris\.MediaPlayer2\.[A-Za-z0-9_.-]+$/.test(bus)) return
     tabProc.command = ["sh", "-c",
-      'ws=$(hyprctl activeworkspace -j | jq -r .id)\n'
+      'ws=$(hyprctl activeworkspace -j | jq -r .id 2>/dev/null)\n'
       + 'busctl --user call "$1" /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2 Raise || exit 1\n'
       + 'sleep 0.35\n'
-      + '[ -n "$ws" ] || exit 0\n'
+      + 'case "$ws" in ""|null) exit 0;; esac\n'
       + 'r=$(hyprctl dispatch "hl.dsp.focus({ workspace = $ws })" 2>&1)\n'
       + '[ "$r" = ok ] || hyprctl dispatch workspace "$ws" >/dev/null',
-      "sh", String(player.dbusName)]
+      "sh", bus]
     tabProc.running = true
   }
   Process { id: tabProc }
@@ -293,7 +311,7 @@ Item {
   property var videoViews: ({})
   readonly property string viewKey: site !== "" ? site : Model.desktopId(player)
   readonly property var videoView: videoViews[viewKey] || ({ zoom: 1, fx: 0, fy: 0 })
-  function saveVideoView(view) { videoViews = _with(videoViews, viewKey, view) }
+  function saveVideoView(view) { if (viewKey !== "") videoViews = _with(videoViews, viewKey, view) }
 
   // ---------------------------------------------------------------- controls
 
@@ -392,23 +410,40 @@ Item {
     cache: false
   }
   property string artFile: ""
+  property int artSeq: 0
 
   function fetchArt() {
     artFetch.running = false
+    artSeq++
     if (!coverColors || artUrl === "") { artFile = ""; coverOk = false; return }
-    if (artUrl.indexOf("file://") === 0) { artFile = decodeURIComponent(artUrl.substring(7)); return }
-    if (!/^https?:\/\//i.test(artUrl)) { artFile = ""; coverOk = false; return }
-    artFetch.target = cacheDir + "/" + Qt.md5(artUrl) + ".img"
+    if (artUrl.indexOf("file://") === 0) {
+      try {
+        artFile = decodeURIComponent(artUrl.replace(/^file:\/\/(?:localhost)?/i, ""))
+      } catch (e) {
+        artFile = ""; coverOk = false
+      }
+      return
+    }
+    if (!/^https?:\/\//i.test(artUrl) || cacheDir === "") { artFile = ""; coverOk = false; return }
+    artFile = ""; coverOk = false
+    var target = cacheDir + "/" + Qt.md5(artUrl) + ".img"
+    artFetch.pendingSeq = artSeq
+    artFetch.pendingTarget = target
     artFetch.command = ["sh", "-c",
-      'mkdir -p "$1" && find "$1" -name "*.img" -mtime +7 -delete; [ -s "$2" ] || curl -sfL --max-time 10 -o "$2" "$3"',
-      "sh", cacheDir, artFetch.target, artUrl]
+      'mkdir -p -m 700 "$1" && find "$1" -maxdepth 1 -type f -name "*.img" -mtime +7 -delete\n'
+      + 'if [ -s "$2" ] && [ ! -L "$2" ]; then exit 0; fi\n'
+      + 'tmp="$2.part.$$"\n'
+      + 'trap \'rm -f "$tmp"\' EXIT\n'
+      + 'curl -sfL --proto "=http,https" --proto-redir "=http,https" --max-filesize 10485760 --max-time 10 -o "$tmp" -- "$3" && chmod 600 "$tmp" && mv -Tf "$tmp" "$2"',
+      "sh", cacheDir, target, artUrl]
     artFetch.running = true
   }
 
   Process {
     id: artFetch
-    property string target: ""
-    onExited: function(code) { if (code === 0) svc.artFile = target }
+    property string pendingTarget: ""
+    property int pendingSeq: 0
+    onExited: function(code) { if (code === 0 && pendingSeq === svc.artSeq) svc.artFile = pendingTarget }
   }
 
   function sampleColors() {

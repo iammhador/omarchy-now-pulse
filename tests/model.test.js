@@ -52,6 +52,18 @@ assert.equal(appGlyph(P('weird')), '󰝚')
 assert.equal(desktopId(brave), 'brave-browser')
 assert.equal(desktopId(zen), 'zen')
 assert.equal(windowClass(zen), 'class:^(zen)$')
+assert.equal(windowClass(P('org.gnome.Totem', { desktopEntry: 'org.gnome.Totem' })), 'class:^(org\\.gnome\\.Totem)$')
+
+// cleanText / safeArtUrl
+assert.equal(cleanText('Hello\nWorld\x07\t!'), 'Hello World !')
+assert.equal(safeArtUrl('https://i.scdn.co/image/abc'), 'https://i.scdn.co/image/abc')
+assert.equal(safeArtUrl('http://localhost:8080/cover.jpg'), 'http://localhost:8080/cover.jpg')
+assert.equal(safeArtUrl('file:///home/user/cover.png'), 'file:///home/user/cover.png')
+assert.equal(safeArtUrl('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA')
+assert.equal(safeArtUrl('ftp://evil.example/a.png'), '')
+assert.equal(safeArtUrl('image://theme/icon'), '')
+assert.equal(safeArtUrl('data:text/html;base64,AAAA'), '')
+assert.equal(safeArtUrl('http://169.254.169.254/latest/meta-data'), '')
 
 // siteName
 assert.equal(siteName('https://www.youtube.com/watch?v=x'), 'YouTube')
@@ -111,11 +123,41 @@ assert.equal(pickWindow(wins, 'mpv', 'x'), -1)
 assert.equal(pickWindow(wins, '', 'x'), -1)
 assert.equal(pickWindow(null, 'zen', 'x'), -1)
 
-// showsTrack
+// #15839: two PiP windows sharing the same appId must not blindly pick the first PiP
+const twoPips = [
+  { appId: 'firefox', title: 'Picture-in-Picture' },
+  { appId: 'firefox', title: 'Picture-in-Picture' },
+  { appId: 'firefox', title: 'Dashboard — Mozilla Firefox' }
+]
+assert.equal(pickWindow(twoPips, 'firefox', 'Some Video Title'), -1)
+// Two PiPs with an unambiguous matching non-PiP tab can mirror the verified tab
+assert.equal(pickWindow(twoPips.concat([{ appId: 'firefox', title: 'Hoor (Official Video) - YouTube — Mozilla Firefox' }]), 'firefox', 'Hoor (Official Video)'), 3)
+// Two titled PiP windows pick only the matching PiP
+const titledPips = [
+  { appId: 'firefox', title: 'Picture-in-Picture - Private Session' },
+  { appId: 'firefox', title: 'Picture-in-Picture - Hoor (Official Video)' }
+]
+assert.equal(pickWindow(titledPips, 'firefox', 'Hoor (Official Video)'), 1)
+// Generic or empty track titles never capture an untitled PiP, nor do multiple same-app browser instances
+assert.equal(pickWindow([{ appId: 'firefox', title: 'Picture-in-Picture' }], 'firefox', 'Instagram'), -1)
+assert.equal(pickWindow([{ appId: 'firefox', title: 'Picture-in-Picture' }], 'firefox', ''), -1)
+assert.equal(pickWindow([{ appId: 'firefox', title: 'Picture-in-Picture' }], 'firefox', 'Hoor (Official Video)', 2), -1)
+// Two non-PiP windows matching the same title are ambiguous
+assert.equal(pickWindow([
+  { appId: 'firefox', title: 'Hoor (Official Video) — Mozilla Firefox' },
+  { appId: 'firefox', title: 'Hoor (Official Video) — Mozilla Firefox' }
+], 'firefox', 'Hoor (Official Video)'), -1)
+
+// showsTrack: generic PiP still matches, titled PiP must match track, clamp handles NaN
 assert.ok(showsTrack('(209) Ye Fitoor Mera - Arijit Singh - YouTube — Zen Browser', 'Ye Fitoor Mera - Arijit Singh'))
 assert.ok(!showsTrack('Hacker News — Zen Browser', 'Ye Fitoor Mera'))
 assert.ok(showsTrack('Picture-in-Picture', 'anything'))
+assert.ok(!showsTrack('Picture-in-Picture - Other Video — Mozilla Firefox', 'Hoor'))
 assert.ok(showsTrack('Whatever', ''))
+assert.ok(isVideoTitleVerified({ title: 'Hoor (Official Video) - YouTube — Zen Browser' }, 'Hoor (Official Video)'))
+assert.ok(!isVideoTitleVerified({ title: 'Picture-in-Picture' }, 'Hoor (Official Video)'))
+assert.equal(pickWindow([{ appId: 'zen-browser', title: 'Hoor (Official Video) — Zen Browser' }], 'zen', 'Hoor (Official Video)'), 0)
+assert.equal(clamp(NaN, 0, 1), 0)
 
 // clampView / zoomAt (content 400x200 in a 400x225 viewport)
 let v = clampView({ zoom: 1, x: -50, y: -50 }, 400, 200, 400, 225)
